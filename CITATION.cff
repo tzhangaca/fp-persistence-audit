@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use fp-persistence-audit in research, please cite this software."
+title: fp-persistence-audit
+type: software
+authors:
+  - family-names: Zhang
+    given-names: Tongchen
+    orcid: https://orcid.org/0009-0003-9076-0678
+version: 0.1.0
+license: Apache-2.0
+repository-code: https://github.com/tzhangaca/fp-persistence-audit
