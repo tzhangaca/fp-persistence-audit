@@ -1,5 +1,7 @@
 # fp-persistence-audit
 
+[![DOI](https://zenodo.org/badge/1413689835.svg)](https://doi.org/10.5281/zenodo.23288628)
+
 `fp-persistence-audit` audits whether false-positive decisions repeatedly concentrate on the same entities beyond a fixed-count, context-conditioned reference.
 
 It is a retrospective, model-agnostic auditing tool. It accepts either externally supplied binary false-positive flags or externally generated scores converted to an explicit exact number of flags. It is not a fraud model.
@@ -128,3 +130,5 @@ No claim of external adoption or independent validation is made.
 ## Version status
 
 Version `0.1.0` is the initial generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
+
+The archived v0.1.0 release is available at [https://doi.org/10.5281/zenodo.23288629](https://doi.org/10.5281/zenodo.23288629).
