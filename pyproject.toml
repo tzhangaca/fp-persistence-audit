@@ -9,13 +9,25 @@ description = "A model-agnostic audit of repeated false-positive concentration"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {file = "LICENSE"}
+authors = [
+  {name = "Tongchen Zhang"},
+]
 dependencies = [
   "numpy>=2.2,<2.3",
   "pandas>=2.3,<2.4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/tzhangaca/fp-persistence-audit"
+Repository = "https://github.com/tzhangaca/fp-persistence-audit"
+Issues = "https://github.com/tzhangaca/fp-persistence-audit/issues"
+
 [project.optional-dependencies]
-test = ["pytest>=7.4"]
+test = [
+  "pytest>=7.4",
+  "python-dateutil>=2.8.2",
+  "pytz>=2024.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
