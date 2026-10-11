@@ -7,5 +7,6 @@ authors:
     given-names: Tongchen
     orcid: https://orcid.org/0009-0003-9076-0678
 version: 0.1.2
+doi: 10.5281/zenodo.23304468
 license: Apache-2.0
 repository-code: https://github.com/tzhangaca/fp-persistence-audit
