@@ -6,4 +6,4 @@ It intentionally excludes private or embargoed preregistration materials, datase
 
 The generic implementation was validated before this release against a small exact known-answer fixture, deterministic score-selection tests, and dataframe row-order-invariance tests. These are implementation validations, not claims of independent external validation.
 
-The private source snapshot used to assemble this release was Git commit `ac743bd3193adf510d109676e6b1d4b004d0d489`.
+The initial clean public extraction was based on private source snapshot `ac743bd3193adf510d109676e6b1d4b004d0d489`. Subsequent public-release hardening is recorded in the independent public repository history.

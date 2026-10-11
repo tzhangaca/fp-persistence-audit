@@ -1,5 +1,6 @@
 """Public API for the generic false-positive persistence audit."""
 
+from ._version import PACKAGE_VERSION as __version__
 from .public_api import audit, flags_from_scores
 from .public_types import (
     AuditResult,
@@ -9,8 +10,6 @@ from .public_types import (
     FlagSelection,
     PermutationSpec,
 )
-
-__version__ = "0.1.1"
 
 __all__ = [
     "AuditResult",

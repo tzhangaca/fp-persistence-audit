@@ -12,7 +12,7 @@ def compute_repeat_fp_by_entity(
 ) -> pd.DataFrame:
     """Calculate eligibility from legitimate exposure and repeat-FP status."""
     legitimate = frame.loc[frame[legitimate_column].astype(bool)]
-    result = legitimate.groupby(entity_column, dropna=False)[false_positive_column].agg(
+    result = legitimate.groupby(entity_column, dropna=False, sort=False)[false_positive_column].agg(
         legitimate_exposure="size", false_positive_count="sum"
     )
     upper = True if exposure_max is None else result["legitimate_exposure"] <= exposure_max

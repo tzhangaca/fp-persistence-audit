@@ -1,6 +1,8 @@
+from itertools import combinations, product
 from pathlib import Path
 import runpy
 
+import numpy as np
 import pytest
 
 from fp_persistence import AuditStatus
@@ -37,3 +39,18 @@ def test_dispersed_and_concentrated_example_controls_flag_burden():
         concentrated.estimates.excess_repeat_fp_percentage_points
         > dispersed.estimates.excess_repeat_fp_percentage_points
     )
+
+    stratum_choices = []
+    for _, group in events.groupby("final_stratum", sort=True):
+        stratum_choices.append(list(combinations(group.index.tolist(), 2)))
+    exact_values = []
+    for allocation in product(*stratum_choices):
+        selected = {index for stratum_selection in allocation for index in stratum_selection}
+        flags = events.index.to_series().map(lambda index: int(index in selected))
+        repeated = (
+            flags.groupby(events["entity_id"], sort=False).sum().ge(2).sum()
+        )
+        exact_values.append(repeated / 4)
+    assert float(np.mean(exact_values)) == pytest.approx(0.20)
+    assert dispersed.estimates.reference_expected_repeat_fp_proportion == pytest.approx(0.19)
+    assert concentrated.estimates.reference_expected_repeat_fp_proportion == pytest.approx(0.19)

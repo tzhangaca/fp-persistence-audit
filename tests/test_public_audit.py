@@ -1,5 +1,14 @@
 from dataclasses import replace
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+import importlib.metadata
+import json
+import os
+import subprocess
+import sys
+from uuid import UUID
 
+import fp_persistence
 import pandas as pd
 import pytest
 
@@ -10,6 +19,7 @@ from fp_persistence import (
     FlagSelection,
     PermutationSpec,
     audit,
+    flags_from_scores,
 )
 from fp_persistence.public_types import RatioState
 
@@ -68,22 +78,19 @@ def test_estimable_external_flag_audit_uses_frozen_metric_semantics():
 
 def test_score_selection_aligns_only_by_event_id_and_copies_provenance():
     frame = _base_frame()
-    flags = pd.Series(
-        [0, 1, 0, 0, 1, 0, 0, 1, 0],
-        index=["e08", "e00", "e07", "e06", "e01", "e05", "e04", "e03", "e02"],
+    score_frame = frame.assign(
+        external_score=frame["event_id"].map({"e00": 3, "e01": 2, "e03": 1}).fillna(0)
     )
-    selection = FlagSelection(
-        flags_by_event_id=flags,
-        selected_event_ids=("e00", "e01", "e03"),
-        legitimate_event_count=9,
-        n_select=3,
-        selected_event_count=3,
+    selection = flags_from_scores(
+        score_frame,
         score_col="external_score",
         event_id_col="event_id",
+        n_select=3,
         legitimate_col="legitimate",
-        ordering="score_desc_event_id_asc",
-        selected_event_ids_sha256="a" * 64,
-        flags_by_event_id_sha256="b" * 64,
+    )
+    selection = replace(
+        selection,
+        flags_by_event_id=selection.flags_by_event_id.sample(frac=1, random_state=7),
     )
     result = audit(
         frame,
@@ -100,7 +107,10 @@ def test_score_selection_aligns_only_by_event_id_and_copies_provenance():
     assert result.counts.repeated_fp_entity_count == 1
     assert result.provenance.flag_mode == "score_selection"
     assert result.provenance.score_selection_spec["n_select"] == 3
-    assert result.provenance.score_selection_spec["selected_event_ids_sha256"] == "a" * 64
+    assert (
+        result.provenance.score_selection_spec["selected_event_ids_sha256"]
+        == selection.selected_event_ids_sha256
+    )
     assert "selected_event_ids" not in result.provenance.score_selection_spec
     assert "flags_by_event_id" not in result.provenance.score_selection_spec
 
@@ -254,6 +264,237 @@ def test_duplicate_and_mixed_event_ids_raise_validation_errors():
     mixed["event_id"] = [1, "e01", "e02", "e03", "e04", "e05", "e06", "e07", "e08"]
     with pytest.raises(AuditValidationError, match="consistently sortable"):
         _audit_external(mixed)
+
+    comparable_mixed = _base_frame()
+    comparable_mixed["event_id"] = pd.Series(
+        [1, 2.0, 3, 4, 5, 6, 7, 8, 9], dtype=object
+    ).to_numpy()
+    with pytest.raises(AuditValidationError, match="consistent representation"):
+        _audit_external(comparable_mixed)
+
+
+class _PartialOrderEventId:
+    def __init__(self, members):
+        self.members = frozenset(members)
+
+    def __hash__(self):
+        return hash(self.members)
+
+    def __eq__(self, other):
+        return isinstance(other, _PartialOrderEventId) and self.members == other.members
+
+    def __lt__(self, other):
+        if not isinstance(other, _PartialOrderEventId):
+            return NotImplemented
+        return self.members < other.members
+
+
+@pytest.mark.parametrize(
+    "event_ids",
+    [
+        [frozenset({f"id-{index}"}) for index in range(9)],
+        [_PartialOrderEventId({index}) for index in range(9)],
+    ],
+)
+def test_external_flag_audit_rejects_partial_order_event_ids(event_ids):
+    frame = _base_frame()
+    frame["event_id"] = event_ids
+    with pytest.raises(AuditValidationError, match="unsupported identifier representation"):
+        _audit_external(frame)
+
+
+@pytest.mark.parametrize(
+    "event_ids",
+    [
+        [f"id-{index}" for index in range(9)],
+        list(range(9)),
+        [UUID(int=index + 1) for index in range(9)],
+        [date(2026, 1, index + 1) for index in range(9)],
+    ],
+)
+def test_external_flag_audit_accepts_supported_total_order_event_ids(event_ids):
+    frame = _base_frame()
+    frame["event_id"] = event_ids
+    assert _audit_external(frame).status is AuditStatus.ESTIMABLE
+
+
+@pytest.mark.parametrize(
+    "column", ["event_id", "entity", "stratum", "flag", "legitimate"]
+)
+def test_audit_rejects_duplicate_dataframe_column_labels(column):
+    frame = _base_frame()
+    duplicated = pd.concat([frame, frame[[column]]], axis=1)
+    with pytest.raises(AuditValidationError, match="column labels must be unique"):
+        _audit_external(duplicated)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        [0.0, -0.0, 0.0, -0.0],
+        [Decimal("1.0"), Decimal("1.00"), Decimal("1.0"), Decimal("1.00")],
+        [
+            datetime(2026, 1, 1, 0, tzinfo=timezone.utc),
+            datetime(2025, 12, 31, 19, tzinfo=timezone(-timedelta(hours=5))),
+            datetime(2026, 1, 1, 0, tzinfo=timezone.utc),
+            datetime(2025, 12, 31, 19, tzinfo=timezone(-timedelta(hours=5))),
+        ],
+    ],
+)
+def test_equality_equivalent_final_strata_group_together_and_are_shuffle_invariant(labels):
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a1", "a2", "b1", "b2"],
+            "entity": ["A", "A", "B", "B"],
+            "legitimate": [1, 1, 1, 1],
+            "flag": [1, 1, 0, 0],
+            "stratum": labels,
+        }
+    )
+    original = _audit_external(
+        frame,
+        exposure=ExposureSpec(2, 2),
+        permutation=PermutationSpec(200, 2026091601),
+    )
+    shuffled = _audit_external(
+        frame.sample(frac=1, random_state=902).copy(),
+        exposure=ExposureSpec(2, 2),
+        permutation=PermutationSpec(200, 2026091601),
+    )
+    assert original.diagnostics.final_stratum_count == 1
+    assert original.diagnostics.final_stratum_size_distribution == {4: 1}
+    assert original.population == shuffled.population
+    assert original.counts == shuffled.counts
+    assert original.estimates == shuffled.estimates
+    assert original.reference == shuffled.reference
+    assert original.diagnostics == shuffled.diagnostics
+
+
+def _supported_tuple_stratum_frame():
+    first_label = ("a", "b", "c")
+    second_label = ("a", "b", "d")
+    first_positions = {0, 1, 3, 6, 10}
+    return pd.DataFrame(
+        {
+            "event_id": [f"id-{index:02d}" for index in range(12)],
+            "entity": ["A"] * 3 + ["B"] * 3 + ["C"] * 3 + ["D"] * 3,
+            "legitimate": [1] * 12,
+            "flag": [1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+            "stratum": [
+                first_label if index in first_positions else second_label
+                for index in range(12)
+            ],
+        }
+    )
+
+
+def test_supported_tuple_strata_are_shuffle_invariant():
+    frame = _supported_tuple_stratum_frame()
+    permutation = PermutationSpec(150, 8675309)
+    original = _audit_external(
+        frame, exposure=ExposureSpec(3, 3), permutation=permutation
+    )
+    shuffled = _audit_external(
+        frame.sample(frac=1, random_state=91).reset_index(drop=True),
+        exposure=ExposureSpec(3, 3),
+        permutation=permutation,
+    )
+    assert original.population == shuffled.population
+    assert original.counts == shuffled.counts
+    assert original.estimates == shuffled.estimates
+    assert original.reference == shuffled.reference
+    assert original.diagnostics == shuffled.diagnostics
+
+
+def test_supported_stratum_order_is_independent_of_python_hash_seed():
+    script = r'''
+import json
+import pandas as pd
+from fp_persistence import ExposureSpec, PermutationSpec, audit
+
+first_label = ("a", "b", "c")
+second_label = ("a", "b", "d")
+first_positions = {0, 1, 3, 6, 10}
+frame = pd.DataFrame({
+    "event_id": [f"id-{index:02d}" for index in range(12)],
+    "entity": ["A"] * 3 + ["B"] * 3 + ["C"] * 3 + ["D"] * 3,
+    "legitimate": [1] * 12,
+    "flag": [1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    "stratum": [
+        first_label if index in first_positions else second_label
+        for index in range(12)
+    ],
+})
+result = audit(
+    frame,
+    entity_col="entity",
+    event_id_col="event_id",
+    final_stratum_col="stratum",
+    exposure=ExposureSpec(3, 3),
+    permutation=PermutationSpec(150, 8675309),
+    flag_col="flag",
+    legitimate_col="legitimate",
+)
+serialized = result.to_dict()
+print(json.dumps({
+    "counts": serialized["counts"],
+    "estimates": serialized["estimates"],
+    "reference": serialized["reference"],
+    "diagnostics": serialized["diagnostics"],
+}, sort_keys=True))
+'''
+    outputs = []
+    for hash_seed in ("1", "5"):
+        environment = os.environ.copy()
+        environment["PYTHONHASHSEED"] = hash_seed
+        outputs.append(
+            subprocess.check_output(
+                [sys.executable, "-c", script],
+                env=environment,
+                text=True,
+            ).strip()
+        )
+    assert json.loads(outputs[0]) == json.loads(outputs[1])
+
+
+def test_provenance_uses_imported_code_version_not_installed_metadata(monkeypatch):
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: "9.9.9")
+    result = _audit_external(_base_frame())
+    assert result.provenance.package_version == fp_persistence.__version__ == "0.1.2"
+
+
+class _NonOrderableEntity:
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __eq__(self, other):
+        return isinstance(other, _NonOrderableEntity) and self.value == other.value
+
+    def __repr__(self):
+        return f"_NonOrderableEntity({self.value!r})"
+
+
+def test_custom_hashable_entity_ids_are_rejected():
+    entity_a = _NonOrderableEntity("A")
+    entity_b = _NonOrderableEntity("B")
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a1", "a2", "b1", "b2"],
+            "entity": [entity_a, entity_a, entity_b, entity_b],
+            "legitimate": [1, 1, 1, 1],
+            "flag": [1, 1, 0, 0],
+            "stratum": ["one", "one", "one", "one"],
+        }
+    )
+    with pytest.raises(AuditValidationError, match="unsupported identifier representation"):
+        _audit_external(
+            frame,
+            exposure=ExposureSpec(2, 2),
+            permutation=PermutationSpec(100, 47),
+        )
 
 
 def test_flag_selection_event_id_coverage_mismatch_is_rejected():

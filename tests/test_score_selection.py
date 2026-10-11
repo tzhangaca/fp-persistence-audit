@@ -1,4 +1,7 @@
 from dataclasses import replace
+from datetime import date
+from decimal import Decimal
+from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -69,6 +72,132 @@ def test_score_ties_are_resolved_by_event_id_ascending_not_row_order():
     assert selection.selected_event_ids == ("e1", "e2", "e3")
 
 
+def test_integer_scores_preserve_order_above_binary64_exact_range():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": [2**53, 2**53 + 1],
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
+def test_numpy_float64_and_python_integer_use_exact_numeric_ordering():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": pd.Series([np.float64(2**53), 2**53 + 1], dtype=object),
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
+def test_numpy_float32_and_python_integer_use_exact_numeric_ordering():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": pd.Series([np.float32(2**24), 2**24 + 1], dtype=object),
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
+def test_python_integer_and_numpy_integer_use_exact_numeric_ordering():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": pd.Series([np.int64(10), 11], dtype=object),
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
+def test_decimal_and_python_float_use_exact_numeric_ordering():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": pd.Series([Decimal("0.1"), 0.1], dtype=object),
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
+def test_true_cross_representation_numeric_tie_uses_event_id():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["z-first-row", "a-second-row"],
+            "score": pd.Series([Decimal("0.5"), np.float32(0.5)], dtype=object),
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("a-second-row",)
+
+
+def test_decimal_scores_preserve_high_precision_ordering():
+    frame = pd.DataFrame(
+        {
+            "event_id": ["a-lower", "z-higher"],
+            "score": [Decimal("1.0000000000000000001"), Decimal("1.0000000000000000002")],
+            "legitimate": [1, 1],
+        }
+    )
+    selection = flags_from_scores(
+        frame,
+        score_col="score",
+        event_id_col="event_id",
+        n_select=1,
+        legitimate_col="legitimate",
+    )
+    assert selection.selected_event_ids == ("z-higher",)
+
+
 def test_nonlegitimate_high_scores_are_excluded_from_ranking():
     frame = _score_frame()
     extra = pd.DataFrame(
@@ -122,11 +251,72 @@ def test_missing_event_ids_are_rejected():
         _select(frame, 2)
 
 
+@pytest.mark.parametrize("column", ["event_id", "score", "legitimate"])
+def test_score_selection_rejects_duplicate_dataframe_column_labels(column):
+    frame = _score_frame()
+    duplicated = pd.concat([frame, frame[[column]]], axis=1)
+    with pytest.raises(AuditValidationError, match="column labels must be unique"):
+        _select(duplicated, 2)
+
+
 def test_mixed_incomparable_event_id_representations_are_rejected():
     frame = _score_frame()
     frame["event_id"] = [1, "e1", "e3", "e2", "e4", "e6"]
     with pytest.raises(AuditValidationError, match="consistently sortable"):
         _select(frame, 2)
+
+
+def test_mixed_comparable_event_id_representations_are_rejected():
+    frame = _score_frame()
+    frame["event_id"] = pd.Series([1, 2.0, 3, 4, 5, 6], dtype=object).to_numpy()
+    with pytest.raises(AuditValidationError, match="consistent representation"):
+        _select(frame, 2)
+
+
+class _PartialOrderEventId:
+    def __init__(self, members):
+        self.members = frozenset(members)
+
+    def __hash__(self):
+        return hash(self.members)
+
+    def __eq__(self, other):
+        return isinstance(other, _PartialOrderEventId) and self.members == other.members
+
+    def __lt__(self, other):
+        if not isinstance(other, _PartialOrderEventId):
+            return NotImplemented
+        return self.members < other.members
+
+
+@pytest.mark.parametrize(
+    "event_ids",
+    [
+        [frozenset({f"id-{index}"}) for index in range(6)],
+        [_PartialOrderEventId({index}) for index in range(6)],
+    ],
+)
+def test_score_selection_rejects_partial_order_event_ids(event_ids):
+    frame = _score_frame()
+    frame["event_id"] = event_ids
+    with pytest.raises(AuditValidationError, match="unsupported identifier representation"):
+        _select(frame, 2)
+
+
+@pytest.mark.parametrize(
+    "event_ids",
+    [
+        [1, 2, 3, 4, 5, 6],
+        ["a", "b", "c", "d", "e", "f"],
+        [UUID(int=value) for value in range(1, 7)],
+        [date(2026, 1, value) for value in range(1, 7)],
+    ],
+)
+def test_homogeneous_supported_event_id_representations_pass(event_ids):
+    frame = _score_frame()
+    frame["event_id"] = event_ids
+    selection = _select(frame, 2)
+    assert selection.selected_event_count == 2
 
 
 @pytest.mark.parametrize("n_select", [-1, True])
@@ -199,6 +389,27 @@ def test_flag_selection_passes_directly_to_audit_without_dataframe_mutation():
     assert result.diagnostics.flag_mode == "score_selection"
     assert result.provenance.score_selection_spec["n_select"] == 3
     pd.testing.assert_frame_equal(frame, before)
+
+
+@pytest.mark.parametrize(
+    "hash_field",
+    ["selected_event_ids_sha256", "flags_by_event_id_sha256"],
+)
+def test_audit_rejects_tampered_flag_selection_hashes(hash_field):
+    frame = _score_frame()
+    selection = _select(frame, 3)
+    tampered = replace(selection, **{hash_field: "0" * 64})
+    with pytest.raises(AuditValidationError, match=hash_field):
+        audit(
+            frame,
+            entity_col="entity",
+            event_id_col="event_id",
+            final_stratum_col="stratum",
+            exposure=ExposureSpec(2, 2),
+            permutation=PermutationSpec(20, 31),
+            flag_selection=tampered,
+            legitimate_col="legitimate",
+        )
 
 
 def test_score_selection_and_equivalent_external_flags_are_scientifically_identical():

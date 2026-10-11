@@ -18,7 +18,13 @@ This package does not:
 
 ## Installation
 
-From a local checkout:
+Install the release from PyPI:
+
+```bash
+python -m pip install fp-persistence-audit
+```
+
+From a local source checkout:
 
 ```bash
 python -m pip install .
@@ -30,9 +36,21 @@ For development and tests:
 python -m pip install -e '.[test]'
 ```
 
+Python `3.10` through `3.13` is the declared compatibility range.
+
+## Supported input domain
+
+The public API deliberately supports a finite, deterministic input domain; arbitrary hashable Python objects are not accepted. Event IDs and entity IDs may be `str`, non-Boolean `int`, `bytes`, `UUID`, `date`, timezone-naive `datetime`/`pandas.Timestamp`, UTC or `datetime.timezone` fixed-offset `datetime`/`pandas.Timestamp`, finite `float`, finite `Decimal`, losslessly normalized NumPy scalar equivalents, or recursively valid tuples made only from those types. Dynamic timezone-rule values (including `zoneinfo`, pytz regional zones, dateutil regional zones, and custom `tzinfo` implementations) are intentionally unsupported in v0.1.2; normalize them to UTC, a `datetime.timezone` fixed offset, or a stable string before calling the audit. Values within each event-ID or entity-ID column must use one consistent representation. Event IDs must also be nonmissing, unique, and totally ordered; dataframe index and incoming row order are never identifiers or tie breakers.
+
+Final-stratum labels use the same supported value types and datetime timezone restriction, but may mix supported representations when their equality is deterministic; equality-equivalent numeric or supported datetime labels form one stratum. Unsupported containers (`list`, `dict`, `set`, `frozenset`), nonfinite numbers, Booleans used as identifiers, dynamic/custom timezone values, and arbitrary custom objects are rejected with `AuditValidationError`.
+
+Scores may be finite Python or NumPy integers/floats, or finite `Decimal` values. They are ranked without lossy float coercion, and mixed numeric ordering is independent of the caller's mutable `Decimal` precision and `FloatOperation` trap settings. Complex values, Booleans, nonfinite values, strings, and custom numeric-like objects are rejected. Flag and legitimate-indicator columns accept only Python/NumPy Booleans or integer `0`/`1`; generic truthiness and floating `0.0`/`1.0` are not accepted.
+
 ## Five-minute quick start
 
 Each row is an event. The two scenarios below use the same 12 legitimate events, four entities, four total false-positive flags, and two flags inside each final context stratum. Only the entity-level concentration of those flags changes.
+
+`final_stratum` is a caller-supplied, prespecified resolved context bucket. The generic package does not construct the Persistence paper's context hierarchy.
 
 ```python
 import json
@@ -125,6 +143,8 @@ With the documented seed and settings, this produces:
 
 The dispersed scenario gives each entity one flag, so no entity has a repeated false positive. The concentrated scenario places repeated flags on A and C, producing observed persistence of `0.5`. Because both scenarios retain four total flags and exactly two flags in both `day-1` and `day-2`, the contrast demonstrates entity-level concentration rather than a change in overall flag burden or context-level flag counts.
 
+The exact conditional reference expectation for this toy fixture is `0.20`; the displayed `0.19` is the documented 500-replicate Monte Carlo estimate.
+
 Entity semantics and context definitions materially affect interpretation and should always be documented.
 
 ## Score-based usage
@@ -172,7 +192,7 @@ An estimable zero is a completed audit whose defined persistence value is zero. 
 
 The public API requires deterministic event IDs and an explicit random seed. Permutations use canonical event ordering, so dataframe row order alone cannot change scientific outputs. The implementation is covered by synthetic tests, dataframe row-shuffle invariance tests, and an exact known-answer regression fixture.
 
-Run the public known-answer regression directly with:
+From a source checkout, run the public known-answer regression directly with:
 
 ```bash
 pytest tests/test_known_answer_reference.py -v
@@ -180,8 +200,12 @@ pytest tests/test_known_answer_reference.py -v
 
 No claim of external adoption or independent validation is made.
 
+## Citation
+
+Use the repository's `CITATION.cff` metadata when citing this software. The DOI badge at the top of this README links to the archived software/version series.
+
 ## Version status
 
-Version `0.1.1` is the current generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
+Version `0.1.2` is the current generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
 
 The archived v0.1.0 release is available at [https://doi.org/10.5281/zenodo.23288629](https://doi.org/10.5281/zenodo.23288629).

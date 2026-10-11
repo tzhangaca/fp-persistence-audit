@@ -1,0 +1,3 @@
+include CITATION.cff
+include PROVENANCE.md
+recursive-include examples *.py

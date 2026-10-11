@@ -197,6 +197,7 @@ def test_exposure_spec_accepts_inclusive_open_or_closed_upper_bound():
         {"replicates": 0, "seed": 1},
         {"replicates": True, "seed": 1},
         {"replicates": 10, "seed": True},
+        {"replicates": 10, "seed": -1},
         {"replicates": 10, "seed": 1, "interval_quantiles": (0.5, 0.5)},
         {"replicates": 10, "seed": 1, "interval_quantiles": (float("nan"), 0.9)},
         {"replicates": 10, "seed": 1, "quantile_method": "nearest"},
@@ -211,6 +212,10 @@ def test_permutation_spec_preserves_frozen_defaults():
     spec = PermutationSpec(2000, 2026091601)
     assert spec.interval_quantiles == (0.025, 0.975)
     assert spec.quantile_method == "linear"
+
+
+def test_permutation_spec_accepts_zero_seed():
+    assert PermutationSpec(10, 0).seed == 0
 
 
 @pytest.mark.parametrize(
@@ -340,6 +345,31 @@ def test_flag_selection_rejects_mixed_incomparable_event_ids():
         FlagSelection(
             flags_by_event_id=pd.Series([1, 0], index=[1, "event-2"]),
             selected_event_ids=(1,),
+            legitimate_event_count=2,
+            n_select=1,
+            selected_event_count=1,
+            score_col="score",
+            event_id_col="event_id",
+            legitimate_col=None,
+            ordering="score_desc_event_id_asc",
+            selected_event_ids_sha256="a" * 64,
+            flags_by_event_id_sha256="b" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_flags",
+    [
+        pd.Series([1.0, 0.0], index=["event-1", "event-2"]),
+        pd.Series(["1", "0"], index=["event-1", "event-2"]),
+        pd.Series([1, 2], index=["event-1", "event-2"]),
+    ],
+)
+def test_flag_selection_requires_boolean_or_integer_binary_values(bad_flags):
+    with pytest.raises(AuditValidationError, match="strictly binary"):
+        FlagSelection(
+            flags_by_event_id=bad_flags,
+            selected_event_ids=("event-1",),
             legitimate_event_count=2,
             n_select=1,
             selected_event_count=1,

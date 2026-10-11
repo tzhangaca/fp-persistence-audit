@@ -10,10 +10,14 @@ import json
 import math
 import re
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Hashable, Literal, Mapping, TypeAlias
+from uuid import UUID
 
+import numpy as np
 import pandas as pd
 
 
@@ -39,6 +43,170 @@ class RatioState(str, Enum):
     POSITIVE_INFINITY = "POSITIVE_INFINITY"
     UNDEFINED_ZERO_OVER_ZERO = "UNDEFINED_ZERO_OVER_ZERO"
     NOT_ESTIMABLE = "NOT_ESTIMABLE"
+
+
+def _normalize_identifier_value(
+    value: object, name: str
+) -> tuple[Hashable, tuple[Any, ...]]:
+    """Validate and losslessly normalize one documented identifier value."""
+    if isinstance(value, np.bool_):
+        value = bool(value)
+    elif isinstance(value, np.integer):
+        value = int(value)
+    elif isinstance(value, np.floating):
+        normalized = value.item()
+        if type(normalized) is not float:
+            raise AuditValidationError(
+                f"{name} contain a NumPy float that cannot be losslessly normalized"
+            )
+        value = normalized
+    elif isinstance(value, np.str_):
+        value = str(value)
+    elif isinstance(value, np.bytes_):
+        value = bytes(value)
+    elif isinstance(value, np.generic):
+        raise AuditValidationError(
+            f"{name} contain an unsupported NumPy scalar representation"
+        )
+
+    value_type = type(value)
+    if value_type is bool:
+        raise AuditValidationError(f"{name} must not use Boolean identifiers")
+    if value_type is int:
+        return value, ("int",)
+    if value_type is float:
+        if not math.isfinite(value):
+            raise AuditValidationError(f"{name} must be finite when numeric")
+        return value, ("float",)
+    if value_type is str:
+        return value, ("str",)
+    if value_type is bytes:
+        return value, ("bytes",)
+    if value_type is Decimal:
+        if not value.is_finite():
+            raise AuditValidationError(f"{name} must be finite when numeric")
+        return value, ("decimal",)
+    if value_type in {datetime, pd.Timestamp}:
+        try:
+            if pd.isna(value):
+                raise AuditValidationError(f"{name} must be nonmissing")
+            value.isoformat()
+            value.utcoffset()
+        except AuditValidationError:
+            raise
+        except Exception as error:
+            raise AuditValidationError(
+                f"{name} contain an invalid datetime representation"
+            ) from error
+        if value.tzinfo is not None and type(value.tzinfo) is not timezone:
+            raise AuditValidationError(
+                f"{name} contain a dynamic or custom timezone; normalize values "
+                "to UTC, a datetime.timezone fixed offset, or a stable string"
+            )
+        return value, ("datetime",)
+    if value_type is date:
+        return value, ("date",)
+    if value_type is UUID:
+        return value, ("uuid",)
+    if value_type is tuple:
+        normalized_items: list[Hashable] = []
+        item_signatures: list[tuple[Any, ...]] = []
+        for item in value:
+            normalized, signature = _normalize_identifier_value(item, name)
+            normalized_items.append(normalized)
+            item_signatures.append(signature)
+        return tuple(normalized_items), ("tuple", tuple(item_signatures))
+    if value is None:
+        raise AuditValidationError(f"{name} must be nonmissing")
+    raise AuditValidationError(
+        f"{name} contain an unsupported identifier representation: "
+        f"{value_type.__module__}.{value_type.__qualname__}"
+    )
+
+
+def _require_supported_identifier_values(
+    values: list[object],
+    name: str,
+    *,
+    consistent_representation: bool,
+    total_order: bool,
+) -> list[Hashable]:
+    """Validate a complete identifier role against the finite public domain."""
+    normalized_values: list[Hashable] = []
+    signatures: set[tuple[Any, ...]] = set()
+    for value in values:
+        normalized, signature = _normalize_identifier_value(value, name)
+        try:
+            hash(normalized)
+        except Exception as error:
+            raise AuditValidationError(f"{name} values must be hashable") from error
+        normalized_values.append(normalized)
+        signatures.add(signature)
+    if consistent_representation and len(signatures) > 1:
+        raise AuditValidationError(
+            f"{name} must use one consistent representation and be consistently sortable"
+        )
+    if total_order:
+        try:
+            ordered_values = sorted(normalized_values)
+        except Exception as error:
+            raise AuditValidationError(
+                f"{name} values must have a deterministic total order"
+            ) from error
+        try:
+            for left, right in zip(ordered_values, ordered_values[1:]):
+                if left != right and not (left < right and not right < left):
+                    raise AuditValidationError(
+                        f"{name} values must have a deterministic total order"
+                    )
+        except AuditValidationError:
+            raise
+        except Exception as error:
+            raise AuditValidationError(
+                f"{name} values must have a deterministic total order"
+            ) from error
+    return normalized_values
+
+
+def _one_dimensional_object_array(values: list[Hashable]) -> np.ndarray:
+    """Preserve validated identifiers as atomic Python objects.
+
+    Constructing a pandas object directly from a list of tuples can infer a
+    MultiIndex, while assigning mixed numeric identifiers can coerce them to a
+    lossy common dtype.  Filling an object array element-by-element prevents
+    both forms of inference.
+    """
+    array = np.empty(len(values), dtype=object)
+    for index, value in enumerate(values):
+        array[index] = value
+    return array
+
+
+def _atomic_object_index(
+    values: list[Hashable], *, name: Hashable | None = None
+) -> pd.Index:
+    """Build a one-dimensional Index whose tuple values remain atomic."""
+    return pd.Index(
+        _one_dimensional_object_array(values),
+        dtype=object,
+        name=name,
+        tupleize_cols=False,
+    )
+
+
+def _require_consistent_event_id_representation(
+    values: list[Hashable], name: str
+) -> tuple[Any, ...] | None:
+    """Require one supported representation and a deterministic total order."""
+    normalized_values = _require_supported_identifier_values(
+        list(values),
+        name,
+        consistent_representation=True,
+        total_order=True,
+    )
+    if not normalized_values:
+        return None
+    return _normalize_identifier_value(normalized_values[0], name)[1]
 
 
 def _require_integer(value: object, name: str, *, minimum: int = 0) -> int:
@@ -153,8 +321,8 @@ class PermutationSpec:
 
     def __post_init__(self) -> None:
         _require_integer(self.replicates, "replicates", minimum=1)
-        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
-            raise AuditValidationError("seed must be an integer and not a Boolean")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+            raise AuditValidationError("seed must be a nonnegative integer and not a Boolean")
         if not isinstance(self.interval_quantiles, tuple) or len(self.interval_quantiles) != 2:
             raise AuditValidationError("interval_quantiles must be a two-item tuple")
         lower = _finite_float_or_none(self.interval_quantiles[0], "lower interval quantile")
@@ -202,14 +370,40 @@ class FlagSelection:
         if not isinstance(self.flags_by_event_id, pd.Series):
             raise AuditValidationError("flags_by_event_id must be a pandas.Series")
         flags = self.flags_by_event_id.copy(deep=True)
-        if flags.index.hasnans or not flags.index.is_unique:
+        flag_event_ids = flags.index.tolist()
+        event_id_representation = _require_consistent_event_id_representation(
+            flag_event_ids, "flag event IDs"
+        )
+        normalized_flag_event_ids = _require_supported_identifier_values(
+            flag_event_ids,
+            "flag event IDs",
+            consistent_representation=True,
+            total_order=True,
+        )
+        if len(set(normalized_flag_event_ids)) != len(normalized_flag_event_ids):
             raise AuditValidationError("flag event IDs must be nonmissing and unique")
-        try:
-            sorted(flags.index.tolist())
-        except TypeError as error:
-            raise AuditValidationError("flag event IDs must be consistently sortable") from error
-        if flags.isna().any() or not flags.isin([0, 1, False, True]).all():
-            raise AuditValidationError("flags_by_event_id values must be strictly binary")
+        binary_flags: list[int] = []
+        for value in flags.tolist():
+            if type(value) is bool or isinstance(value, np.bool_):
+                binary_flags.append(int(value))
+            elif (
+                (type(value) is int or isinstance(value, np.integer))
+                and not isinstance(value, np.bool_)
+                and int(value) in {0, 1}
+            ):
+                binary_flags.append(int(value))
+            else:
+                raise AuditValidationError(
+                    "flags_by_event_id values must be strictly binary Booleans or integers 0/1"
+                )
+        flags = pd.Series(
+            binary_flags,
+            index=_atomic_object_index(
+                normalized_flag_event_ids, name=flags.index.name
+            ),
+            dtype="int8",
+            name=flags.name,
+        )
         _require_integer(self.legitimate_event_count, "legitimate_event_count")
         _require_integer(self.n_select, "n_select")
         _require_integer(self.selected_event_count, "selected_event_count")
@@ -218,11 +412,25 @@ class FlagSelection:
         if self.n_select > self.legitimate_event_count:
             raise AuditValidationError("n_select must not exceed legitimate_event_count")
         selected = tuple(self.selected_event_ids)
+        if selected:
+            selected_representation = _require_consistent_event_id_representation(
+                list(selected), "selected event IDs"
+            )
+            if selected_representation != event_id_representation:
+                raise AuditValidationError(
+                    "selected event IDs must use the same representation as flag event IDs"
+                )
         if len(selected) != self.n_select or self.selected_event_count != self.n_select:
             raise AuditValidationError("selected-event counts must equal n_select")
-        if len(set(selected)) != len(selected):
+        normalized_selected = _require_supported_identifier_values(
+            list(selected),
+            "selected event IDs",
+            consistent_representation=True,
+            total_order=True,
+        )
+        if len(set(normalized_selected)) != len(normalized_selected):
             raise AuditValidationError("selected_event_ids must be unique")
-        if any(event_id not in flags.index for event_id in selected):
+        if not set(normalized_selected) <= set(normalized_flag_event_ids):
             raise AuditValidationError("selected_event_ids must occur in flags_by_event_id")
         if int(flags.sum()) != self.n_select:
             raise AuditValidationError("the binary flag total must equal n_select")
@@ -241,7 +449,7 @@ class FlagSelection:
         except ValueError:
             pass
         object.__setattr__(self, "flags_by_event_id", flags)
-        object.__setattr__(self, "selected_event_ids", selected)
+        object.__setattr__(self, "selected_event_ids", tuple(normalized_selected))
 
 
 @dataclass(frozen=True)
