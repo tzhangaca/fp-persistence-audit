@@ -32,9 +32,11 @@ python -m pip install -e '.[test]'
 
 ## Five-minute quick start
 
-Each row is an event. Supply deterministic event IDs, entity IDs, legitimate-event labels, already resolved final context strata, and binary false-positive flags.
+Each row is an event. The two scenarios below use the same 12 legitimate events, four entities, four total false-positive flags, and two flags inside each final context stratum. Only the entity-level concentration of those flags changes.
 
 ```python
+import json
+
 import pandas as pd
 
 from fp_persistence import ExposureSpec, PermutationSpec, audit
@@ -45,38 +47,83 @@ events = pd.DataFrame(
         "entity_id": ["A"] * 3 + ["B"] * 3 + ["C"] * 3 + ["D"] * 3,
         "legitimate": [1] * 12,
         "final_stratum": ["day-1"] * 6 + ["day-2"] * 6,
-        "fp_flag": [1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
     }
 )
 
-result = audit(
-    events,
-    entity_col="entity_id",
-    event_id_col="event_id",
-    final_stratum_col="final_stratum",
-    legitimate_col="legitimate",
-    flag_col="fp_flag",
-    exposure=ExposureSpec(min_legitimate_events=3, max_legitimate_events=3),
-    permutation=PermutationSpec(replicates=500, seed=2026091601),
-    metadata={
-        "entity_semantics": "payment instrument",
-        "context_definition": "prespecified example strata",
-    },
-)
+flags_dispersed = [
+    1, 0, 0,  # A
+    1, 0, 0,  # B
+    1, 0, 0,  # C
+    1, 0, 0,  # D
+]
+flags_concentrated = [
+    1, 1, 0,  # A
+    0, 0, 0,  # B
+    1, 1, 0,  # C
+    0, 0, 0,  # D
+]
 
-print(
-    {
-        "eligible_entities": result.population.eligible_entity_count,
+summaries = {}
+for scenario, flags in {
+    "dispersed": flags_dispersed,
+    "concentrated": flags_concentrated,
+}.items():
+    scenario_events = events.assign(fp_flag=flags)
+    result = audit(
+        scenario_events,
+        entity_col="entity_id",
+        event_id_col="event_id",
+        final_stratum_col="final_stratum",
+        legitimate_col="legitimate",
+        flag_col="fp_flag",
+        exposure=ExposureSpec(3, 3),
+        permutation=PermutationSpec(500, 2026091601),
+        metadata={
+            "entity_semantics": "payment instrument",
+            "context_definition": "prespecified example strata",
+        },
+    )
+    summaries[scenario] = {
+        "total_false_positive_flags": int(scenario_events["fp_flag"].sum()),
+        "flags_by_final_stratum": {
+            str(stratum): int(count)
+            for stratum, count in scenario_events.groupby(
+                "final_stratum", sort=True
+            )["fp_flag"].sum().items()
+        },
+        "eligible_entity_count": result.population.eligible_entity_count,
         "observed_persistence": result.estimates.observed_repeat_fp_proportion,
         "reference_expectation": result.estimates.reference_expected_repeat_fp_proportion,
-        "excess_persistence_pp": result.estimates.excess_repeat_fp_percentage_points,
-        "final_strata": result.diagnostics.final_stratum_count,
-        "stratum_size_distribution": dict(
-            result.diagnostics.final_stratum_size_distribution
-        ),
+        "excess_persistence_percentage_points": result.estimates.excess_repeat_fp_percentage_points,
     }
-)
+
+print(json.dumps(summaries, indent=2, sort_keys=True))
 ```
+
+With the documented seed and settings, this produces:
+
+```json
+{
+  "concentrated": {
+    "eligible_entity_count": 4,
+    "excess_persistence_percentage_points": 31.0,
+    "flags_by_final_stratum": {"day-1": 2, "day-2": 2},
+    "observed_persistence": 0.5,
+    "reference_expectation": 0.19,
+    "total_false_positive_flags": 4
+  },
+  "dispersed": {
+    "eligible_entity_count": 4,
+    "excess_persistence_percentage_points": -19.0,
+    "flags_by_final_stratum": {"day-1": 2, "day-2": 2},
+    "observed_persistence": 0.0,
+    "reference_expectation": 0.19,
+    "total_false_positive_flags": 4
+  }
+}
+```
+
+The dispersed scenario gives each entity one flag, so no entity has a repeated false positive. The concentrated scenario places repeated flags on A and C, producing observed persistence of `0.5`. Because both scenarios retain four total flags and exactly two flags in both `day-1` and `day-2`, the contrast demonstrates entity-level concentration rather than a change in overall flag burden or context-level flag counts.
 
 Entity semantics and context definitions materially affect interpretation and should always be documented.
 
@@ -125,10 +172,16 @@ An estimable zero is a completed audit whose defined persistence value is zero. 
 
 The public API requires deterministic event IDs and an explicit random seed. Permutations use canonical event ordering, so dataframe row order alone cannot change scientific outputs. The implementation is covered by synthetic tests, dataframe row-shuffle invariance tests, and an exact known-answer regression fixture.
 
+Run the public known-answer regression directly with:
+
+```bash
+pytest tests/test_known_answer_reference.py -v
+```
+
 No claim of external adoption or independent validation is made.
 
 ## Version status
 
-Version `0.1.0` is the initial generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
+Version `0.1.1` is the current generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
 
 The archived v0.1.0 release is available at [https://doi.org/10.5281/zenodo.23288629](https://doi.org/10.5281/zenodo.23288629).

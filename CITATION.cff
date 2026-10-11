@@ -6,7 +6,6 @@ authors:
   - family-names: Zhang
     given-names: Tongchen
     orcid: https://orcid.org/0009-0003-9076-0678
-version: 0.1.0
-doi: 10.5281/zenodo.23288629
+version: 0.1.1
 license: Apache-2.0
 repository-code: https://github.com/tzhangaca/fp-persistence-audit

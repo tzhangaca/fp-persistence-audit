@@ -51,7 +51,7 @@ def _package_version() -> str:
     try:
         return importlib_metadata.version("fp-persistence-audit")
     except importlib_metadata.PackageNotFoundError:
-        return "0.1.0"
+        return "0.1.1"
 
 
 def _validate_column_name(value: object, name: str) -> str:
