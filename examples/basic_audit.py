@@ -1,4 +1,4 @@
-"""Compare dispersed and concentrated false-positive persistence."""
+"""Compare two allocations of the same four false-positive flags: one per entity vs. repeated on two entities."""
 
 import json
 

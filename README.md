@@ -2,9 +2,9 @@
 
 [![DOI](https://zenodo.org/badge/1413689835.svg)](https://doi.org/10.5281/zenodo.23288628)
 
-`fp-persistence-audit` audits whether false-positive decisions repeatedly concentrate on the same entities beyond a fixed-count, context-conditioned reference.
+`fp-persistence-audit` audits whether more entities receive repeated false positives (two or more) than expected under a fixed-count, context-conditioned reference.
 
-Two fraud systems may have the same total false-positive rate while one repeatedly false-positives the same legitimate entities. This package measures that repeated entity-level concentration relative to a fixed-count, context-conditioned reference.
+Two fraud systems may have the same total false-positive rate while one repeatedly false-positives the same legitimate entities. This package measures the prevalence of such repeated false positives, the share of exposure-eligible entities with at least two, relative to a fixed-count, context-conditioned reference. It is a recurrence measure, not a general measure of how concentrated or severe false positives are (see "Interpreting the output" below).
 
 `entity` is the repeated unit being audited, such as a customer, account, card, or payment instrument.
 
@@ -48,7 +48,7 @@ Python `3.10` through `3.13` is the declared compatibility range.
 
 ## Five-minute quick start
 
-Each row is an event. The two scenarios below use the same 12 legitimate events, four entities, four total false-positive flags, and two flags inside each final context stratum. Only the entity-level concentration of those flags changes.
+Each row is an event. The two scenarios below use the same 12 legitimate events, four entities, four total false-positive flags, and two flags inside each final context stratum. Only the entity-level allocation of those flags changes.
 
 `final_stratum` is a caller-supplied, prespecified resolved context bucket. The generic package does not construct the Persistence paper's context hierarchy.
 
@@ -141,7 +141,7 @@ With the documented seed and settings, this produces:
 }
 ```
 
-The dispersed scenario gives each entity one flag, so no entity has a repeated false positive. The concentrated scenario places repeated flags on A and C, producing observed persistence of `0.5`. Because both scenarios retain four total flags and exactly two flags in both `day-1` and `day-2`, the contrast illustrates the mechanics of entity-level concentration rather than a change in overall flag burden or context-level flag counts.
+The dispersed scenario gives each entity one flag, so no entity has a repeated false positive. The concentrated scenario places repeated flags on A and C, producing observed persistence of `0.5`. Because both scenarios retain four total flags and exactly two flags in both `day-1` and `day-2`, the contrast illustrates the mechanics of entity-level recurrence rather than a change in overall flag burden or context-level flag counts. The labels `dispersed` and `concentrated` describe this toy only: here, concentrating the flags also creates repeated false positives, but that is not true in general (see below).
 
 The exact conditional reference expectation for this toy fixture is `0.20`; the displayed `0.19` is the documented 500-replicate Monte Carlo estimate. The documented run's conditional reference interval is `[0, 0.5]`. This toy example is pedagogical and is not evidence of statistical significance.
 
@@ -196,6 +196,8 @@ Overly fine strata can mechanically constrain the fixed-count permutation refere
 
 Report observed persistence, reference expectation, excess persistence in percentage points, the observed/expected ratio when defined, and the reference interval together with the entity definition, exposure bounds, and final-stratum definition. The reference interval is a conditional reference-distribution interval—not a confidence interval for excess persistence and not a p-value. Excess persistence in percentage points can also depend on the underlying false-positive operating point or base rate, so comparisons across very different operating points should be made cautiously.
 
+> **Recurrence is not overall concentration.** Persistence records only whether an entity reaches two false positives, not how many it receives beyond two. Excess persistence is therefore not a monotonic measure of overall false-positive concentration, intensity, or severity. With a fixed number of flags, moving them onto fewer entities can *lower* observed persistence and, when the flag count in each final stratum is unchanged (so the reference expectation is unchanged), excess persistence. For example, among four exposure-eligible entities, per-entity false-positive counts `(2, 2, 0, 0)` give observed persistence `0.5`, while the more concentrated `(4, 0, 0, 0)` gives `0.25`. A negative excess means fewer entities with repeated false positives than the reference predicts. It does not by itself mean that false positives are dispersed or harmless, and a positive excess does not by itself mean that they are more concentrated or more severe. If concentration or intensity matters for your question, also report the per-entity false-positive count distribution (for example, entities with three or more, the maximum, and top-share summaries). Compute it separately from the same flags; this package does not report it.
+
 An estimable zero is a completed audit whose defined persistence value is zero. `NOT_ESTIMABLE` instead means the completed, well-formed audit had zero exposure-eligible entities, so the scientific estimand is undefined. Validation failures and interrupted executions produce no completed result.
 
 ## Supported input domain
@@ -224,6 +226,6 @@ Use the repository's `CITATION.cff` metadata when citing this software. The DOI 
 
 ## Version status
 
-Version `0.1.2` is the current generic audit release. Paper-reproduction and RQ2 workflows are not part of this release.
+Version `0.1.3` is the current generic audit release. It changes documentation and packaging metadata only: statistical calculations, numerical outputs, the result schema and the public API are identical to `0.1.2`, except that the result provenance reports package version `0.1.3`. See [CHANGELOG.md](https://github.com/tzhangaca/fp-persistence-audit/blob/v0.1.3/CHANGELOG.md). Paper-reproduction and RQ2 workflows are not part of this release.
 
-The archived v0.1.0 release is available at [https://doi.org/10.5281/zenodo.23288629](https://doi.org/10.5281/zenodo.23288629).
+Earlier archived releases remain available: v0.1.2 at [https://doi.org/10.5281/zenodo.23304468](https://doi.org/10.5281/zenodo.23304468) and v0.1.0 at [https://doi.org/10.5281/zenodo.23288629](https://doi.org/10.5281/zenodo.23288629).

@@ -67,7 +67,7 @@ def test_integrated_json_csv_and_provenance_are_safe_and_consistent():
     assert parsed == as_dict
     assert "NaN" not in encoded
     assert "Infinity" not in encoded
-    assert result.provenance.package_version == fp_persistence.__version__ == "0.1.2"
+    assert result.provenance.package_version == fp_persistence.__version__ == "0.1.3"
     assert result.provenance.result_schema_version == result.schema_version == "1.0"
     assert result.provenance.statistical_contract_commit == CONTRACT_COMMIT
     assert result.provenance.statistical_contract_sha256 == CONTRACT_SHA256

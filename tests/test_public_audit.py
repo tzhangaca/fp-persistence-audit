@@ -460,7 +460,7 @@ print(json.dumps({
 def test_provenance_uses_imported_code_version_not_installed_metadata(monkeypatch):
     monkeypatch.setattr(importlib.metadata, "version", lambda _: "9.9.9")
     result = _audit_external(_base_frame())
-    assert result.provenance.package_version == fp_persistence.__version__ == "0.1.2"
+    assert result.provenance.package_version == fp_persistence.__version__ == "0.1.3"
 
 
 class _NonOrderableEntity:
